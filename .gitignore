@@ -24,3 +24,4 @@ token.json
 .vscode/
 .idea/
 .DS_Store
+.pylibs/

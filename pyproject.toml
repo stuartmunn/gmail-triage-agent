@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "Agent that triages incoming Gmail: classifies, labels, prioritizes, and acts on messages."
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "claude-agent-sdk",
+]
 
 [project.optional-dependencies]
 dev = [
