@@ -2,6 +2,11 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+See also [`CODING_STANDARDS.md`](./CODING_STANDARDS.md) for accumulated
+Python/agent-SDK conventions — read it alongside this file. It grows
+rule-by-rule as PR Agent flags repeated or avoidable mistakes (see
+Working Practices → Code review below).
+
 ## Project Overview
 
 Gmail Triage Agent watches a Gmail inbox and triages incoming mail —
@@ -111,6 +116,13 @@ Every PR is reviewed automatically by **PR Agent**. After opening a PR:
   templated HTML without validation/escaping.
 - Every tool registered on the agent must be deliberately scoped in
   `allowed_tools` — no wildcard/broad grants.
+- **No secrets, tokens, keys, or credentials** in `CODING_STANDARDS.md` or
+  any other file that reaches GitHub — env vars only, never inlined as
+  examples (not even as plausible-looking placeholder values).
+- See [`CODING_STANDARDS.md`](./CODING_STANDARDS.md) for further
+  Python/agent-SDK conventions; add a rule there (not here) after a PR
+  Agent comment identifies a repeated or avoidable mistake, before
+  merging that PR.
 
 ## Testing
 
