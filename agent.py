@@ -33,7 +33,7 @@ MCP_SERVER_NAME = "gmail_triage"
 @tool("gmail_search", "Search Gmail for messages matching a query (read-only, stub).", {"query": str})
 async def gmail_search(args: dict[str, Any]) -> dict[str, Any]:
     """Stub — no real Gmail API call. Phase 1 keeps Gmail access read-only."""
-    query_text = args["query"]
+    query_text = args.get("query", "")
     return {
         "content": [
             {
@@ -55,7 +55,7 @@ async def telegram_notify(args: dict[str, Any]) -> dict[str, Any]:
     supplied by the model, so a future real implementation can't be steered
     into notifying an arbitrary chat."""
     chat_id = os.environ.get("TELEGRAM_CHAT_ID", "<unset>")
-    message = args["message"]
+    message = args.get("message", "")
     print(f"[stub telegram_notify] to chat_id={chat_id}: {message}")
     return {
         "content": [
