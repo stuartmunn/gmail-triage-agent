@@ -37,6 +37,11 @@ RUN npm install -g @anthropic-ai/claude-code \
 # bind-mounted data/ dir aren't blocked by ownership.
 RUN useradd --create-home --uid 1000 appuser
 
+# Non-root user can't write bytecode caches into the root-owned /app, and we
+# want unbuffered stdout so container logs stream in real time.
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1
+
 WORKDIR /app
 
 # Install Python deps from pyproject (single source of truth for the SDK pin).

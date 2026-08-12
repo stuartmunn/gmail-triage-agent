@@ -2,10 +2,11 @@
 
 Phase 1 skeleton only — see CLAUDE.md for scope and trust boundaries.
 
-Registers exactly two stub tools and nothing else:
+Registers exactly two tools and nothing else:
 
-- ``gmail_search`` (read) — will eventually search/read Gmail. Read-only,
-  stubbed: returns canned data, makes no real Gmail API call.
+- ``gmail_search`` (read) — real, read-only Gmail search via the Gmail API
+  (``gmail.readonly`` scope only; see ``gmail_client``). No write access of
+  any kind.
 - ``telegram_notify`` (send) — will eventually notify a single fixed
   Telegram chat ID read from ``TELEGRAM_CHAT_ID``. Stubbed: prints instead
   of calling the Telegram API.
@@ -17,6 +18,7 @@ are out of scope for this story.
 """
 
 import asyncio
+import json
 import os
 from typing import Any
 
@@ -27,20 +29,47 @@ from claude_agent_sdk import (
     tool,
 )
 
+from gmail_triage_agent.gmail_client import GmailConfigError, search_messages
+
 MCP_SERVER_NAME = "gmail_triage"
 
 
-@tool("gmail_search", "Search Gmail for messages matching a query (read-only, stub).", {"query": str})
+@tool(
+    "gmail_search",
+    "Search Gmail (read-only) using Gmail search syntax "
+    "(e.g. 'newer_than:1d -category:promotions'). Returns message summaries: "
+    "id, thread_id, from, subject, date, snippet.",
+    {"query": str},
+)
 async def gmail_search(args: dict[str, Any]) -> dict[str, Any]:
-    """Stub — no real Gmail API call. Phase 1 keeps Gmail access read-only."""
+    """Real, read-only Gmail search. Runs the blocking Gmail API call in a
+    worker thread so the event loop is not stalled. Credential and API errors
+    are returned as an error result rather than raised, so the agent gets a
+    clean tool response it can reason about."""
     query_text = args.get("query", "")
+    try:
+        results = await asyncio.to_thread(search_messages, query_text)
+    except GmailConfigError as exc:
+        return {
+            "content": [{"type": "text", "text": f"gmail_search unavailable: {exc}"}],
+            "is_error": True,
+        }
+    except Exception as exc:  # noqa: BLE001 — tool boundary: any Gmail/network
+        # failure must become a clean error result, never crash the agent run.
+        return {
+            "content": [{"type": "text", "text": f"gmail_search failed: {exc}"}],
+            "is_error": True,
+        }
+
+    if not results:
+        return {
+            "content": [
+                {"type": "text", "text": f"No messages matched query {query_text!r}."}
+            ]
+        }
     return {
         "content": [
-            {
-                "type": "text",
-                "text": f"[stub] gmail_search called with query={query_text!r}; "
-                "no real Gmail API wired up yet.",
-            }
+            {"type": "text", "text": json.dumps(results, ensure_ascii=False, indent=2)}
         ]
     }
 
