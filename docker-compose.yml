@@ -1,0 +1,33 @@
+# Local run for the Gmail Triage Agent (Phase 1).
+#
+# Build context is ./app so the image only ever sees application code — the
+# repo-root dev files (CLAUDE.md, CODING_STANDARDS.md, README.md) stay out of
+# it. Live data (known-senders list, logs) is bind-mounted from ./data, so it
+# is editable on the host with no rebuild/restart. Secrets are supplied at
+# runtime via an optional .env file (gitignored) and/or the host environment —
+# never baked into the image.
+
+services:
+  agent:
+    build:
+      context: ./app
+    image: gmail-triage-agent:latest
+    env_file:
+      # Optional: drop credentials here (ANTHROPIC_API_KEY, and later the
+      # Gmail/Telegram secrets). Missing file is fine — vars can also come
+      # from the host environment via the pass-through list below.
+      - path: .env
+        required: false
+    environment:
+      # Bare names pass the value through from the host/.env if set, without
+      # hardcoding anything into this file.
+      - ANTHROPIC_API_KEY
+      - TELEGRAM_BOT_TOKEN
+      - TELEGRAM_CHAT_ID
+      # Where the agent reads/writes live data inside the container; matches
+      # the bind mount below.
+      - GTA_DATA_DIR=/app/data
+    volumes:
+      - ./data:/app/data
+    # One-shot triage run — the agent runs and exits. Scheduling is GTA-10.
+    restart: "no"
