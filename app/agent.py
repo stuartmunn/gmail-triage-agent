@@ -7,19 +7,19 @@ Registers exactly two tools and nothing else:
 - ``gmail_search`` (read) — real, read-only Gmail search via the Gmail API
   (``gmail.readonly`` scope only; see ``gmail_client``). No write access of
   any kind.
-- ``telegram_notify`` (send) — will eventually notify a single fixed
-  Telegram chat ID read from ``TELEGRAM_CHAT_ID``. Stubbed: prints instead
-  of calling the Telegram API.
+- ``telegram_notify`` (send) — real, send-only Telegram notification to a
+  single fixed chat ID read from ``TELEGRAM_CHAT_ID`` (see
+  ``telegram_client``). Never reads messages, and the chat ID can't be set
+  by the model.
 
 ``allowed_tools`` is restricted to just these two — no built-in Claude Code
 tools (bash, file read/write, web search, etc.) and no other MCP tools are
-registered or permitted. Real Gmail/Telegram credentials and triage logic
-are out of scope for this story.
+registered or permitted. The triage logic (the gmail-triage skill) is a
+later story.
 """
 
 import asyncio
 import json
-import os
 import sys
 from typing import Any
 
@@ -31,6 +31,11 @@ from claude_agent_sdk import (
 )
 
 from gmail_triage_agent.gmail_client import GmailConfigError, search_messages
+from gmail_triage_agent.telegram_client import (
+    TelegramConfigError,
+    TelegramSendError,
+    send_message,
+)
 
 MCP_SERVER_NAME = "gmail_triage"
 
@@ -87,21 +92,37 @@ async def gmail_search(args: dict[str, Any]) -> dict[str, Any]:
 
 @tool(
     "telegram_notify",
-    "Send a notification to the configured Telegram chat (stub).",
+    "Send a notification message to the operator's fixed Telegram chat. "
+    "Use only when a triaged message genuinely needs attention.",
     {"message": str},
 )
 async def telegram_notify(args: dict[str, Any]) -> dict[str, Any]:
-    """Stub — no real Telegram API call. Chat ID is read from env, never
-    supplied by the model, so a future real implementation can't be steered
-    into notifying an arbitrary chat."""
-    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "<unset>")
+    """Real, send-only Telegram notification. The destination chat ID is read
+    from ``TELEGRAM_CHAT_ID`` inside ``send_message`` — it is never taken from
+    ``args`` — so the model cannot redirect the notification. The blocking
+    HTTP call runs in a worker thread; failures return a clean tool error
+    (never leaking the bot token) rather than crashing the run."""
     message = args.get("message", "")
-    print(f"[stub telegram_notify] to chat_id={chat_id}: {message}")
-    return {
-        "content": [
-            {"type": "text", "text": f"[stub] notified chat {chat_id}: {message}"}
-        ]
-    }
+    try:
+        await asyncio.to_thread(send_message, message)
+    except (TelegramConfigError, TelegramSendError) as exc:
+        return {
+            "content": [{"type": "text", "text": f"telegram_notify failed: {exc}"}],
+            "is_error": True,
+        }
+    except Exception as exc:  # noqa: BLE001 — tool boundary: never crash the run
+        print(f"telegram_notify error: {type(exc).__name__}: {exc}", file=sys.stderr)
+        return {
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"telegram_notify failed ({type(exc).__name__}); "
+                    "see container logs for detail.",
+                }
+            ],
+            "is_error": True,
+        }
+    return {"content": [{"type": "text", "text": "Notification sent."}]}
 
 
 async def main() -> None:

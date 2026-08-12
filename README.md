@@ -107,6 +107,37 @@ need to change scope, just re-run `authorize_gmail.py` and replace
 `GMAIL_TOKEN_JSON`. The agent refuses to start if the token carries any scope
 beyond `gmail.readonly`.
 
+## Telegram notifications
+
+The agent notifies you via a Telegram bot — **send-only, to one fixed chat**.
+It never reads Telegram messages, and the destination chat ID always comes
+from `TELEGRAM_CHAT_ID` (never from the message content or the model), so the
+notification can't be redirected.
+
+One-time setup:
+
+1. In Telegram, message [@BotFather](https://t.me/BotFather), send
+   `/newbot`, and follow the prompts to get a **bot token**.
+2. Start a chat with your new bot and send it any message (a bot can't
+   message you until you've spoken to it first).
+3. Find your **chat ID**: open
+   `https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates` in a browser and
+   read `result[].message.chat.id` (it's the `id` under `chat`).
+4. Set both as env vars — e.g. in the gitignored `.env` at the repo root:
+   ```
+   TELEGRAM_BOT_TOKEN=<your-bot-token>
+   TELEGRAM_CHAT_ID=<your-chat-id>
+   ```
+   `docker compose` passes them through automatically. Neither is ever
+   committed.
+
+To verify quickly from a local checkout:
+
+```bash
+cd app
+python -c "from gmail_triage_agent.telegram_client import send_message; send_message('Gmail Triage Agent test ✅')"
+```
+
 ## Development
 
 Lint before pushing:
