@@ -11,17 +11,27 @@
 # Credentials (ANTHROPIC_API_KEY, and later Gmail/Telegram secrets) are passed
 # in at runtime as env vars — never ARG/ENV-baked here.
 
+# Node.js comes from the official image (both stages are Debian bookworm, so
+# the runtime is ABI-compatible). Copying the binary avoids piping a remote
+# setup script to a root shell during the build — the source is a trusted,
+# digest-pinnable image and apt/npm never fetch-and-execute untrusted code.
+FROM node:22-bookworm-slim AS node
+
 FROM python:3.12-slim-bookworm
 
-# Node.js 22 (matches host) so the SDK can launch the Claude Code CLI.
+# Bring Node + npm across from the official image and wire up the usual
+# entry-point symlinks. libstdc++6 is needed by the node binary.
+COPY --from=node /usr/local/bin/node /usr/local/bin/node
+COPY --from=node /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/npm
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates \
-    && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
-    && apt-get install -y --no-install-recommends nodejs \
-    && npm install -g @anthropic-ai/claude-code \
-    && apt-get purge -y curl \
-    && apt-get autoremove -y \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends libstdc++6 \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
+    && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx
+
+# The SDK launches the Claude Code CLI, so install it globally.
+RUN npm install -g @anthropic-ai/claude-code \
+    && npm cache clean --force
 
 # Non-root user. uid 1000 matches the typical host user so writes to the
 # bind-mounted data/ dir aren't blocked by ownership.

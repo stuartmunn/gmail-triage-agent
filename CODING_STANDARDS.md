@@ -67,6 +67,19 @@ repo (layout, tooling, phase boundaries). Beyond that:
 - Don't build tools or scopes ahead of the current phase — check
   `CLAUDE.md` → Phases before adding a new capability.
 
+## Docker / build hygiene
+
+- **Never pipe a remote script straight into a shell** in a build
+  (`curl … | bash`, `wget -O- … | sh`) — a compromised URL/CDN runs
+  arbitrary code as root at build time. Install from verified sources
+  instead: copy binaries from an official, digest-pinnable base image
+  (multi-stage), or use a signed apt repo with a pinned GPG key. This
+  matters doubly here — the agent handles email and API keys.
+- Secrets (API keys, tokens, credentials) are passed at **runtime** as env
+  vars — never `ARG`/`ENV`-baked into an image and never `COPY`d in.
+- Run the container as a **non-root** user; drop to `USER` after any
+  install steps that genuinely need root.
+
 ## Git / PR hygiene
 
 - Branch names: `GTA-<number>-short-description` for story work,
