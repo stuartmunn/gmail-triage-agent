@@ -2,14 +2,14 @@
 
 Phase 1 trust boundary (see ``CLAUDE.md``): Gmail is **read-only**. This
 module requests only the ``gmail.readonly`` scope and, as defence in depth,
-refuses to authenticate with any token that carries a broader scope — so a
-mis-minted credential can never hand the agent write access.
+refuses to authenticate with any token whose *recorded* scopes are broader —
+so a mis-minted credential is caught early rather than silently trusted.
 
 Credentials are supplied at runtime via the ``GMAIL_TOKEN_JSON`` env var: the
 JSON of an authorised OAuth user (including the long-lived ``refresh_token``),
 as produced one-time by ``authorize_gmail.py``. Nothing is read from disk and
 no secret is ever committed. The short-lived access token is refreshed
-in-memory on each run; the refresh token in the env var is what persists.
+in-memory; the refresh token in the env var is what persists.
 """
 
 from __future__ import annotations
@@ -34,17 +34,45 @@ _MAX_QUERY_LEN = 500
 _MAX_RESULTS_CAP = 50
 _DEFAULT_MAX_RESULTS = 10
 
+# Cached Gmail service — built once per process. The underlying AuthorizedHttp
+# refreshes the access token automatically as it expires, so reuse is safe.
+_service: Any | None = None
+
 
 class GmailConfigError(RuntimeError):
     """Raised when Gmail credentials are missing, malformed, or over-scoped."""
+
+
+def _assert_readonly_scopes(info: dict[str, Any]) -> None:
+    """Reject a token whose recorded scopes exceed ``gmail.readonly``.
+
+    The scopes are read from the token JSON itself (``info["scopes"]``) — the
+    scopes actually granted at consent time. (Do **not** infer scope from
+    ``Credentials.scopes`` after ``from_authorized_user_info``: that reflects
+    the scopes *passed to the constructor*, not what the token was granted, so
+    checking it would be a tautology.)
+    """
+    granted = set(info.get("scopes") or [])
+    if not granted:
+        raise GmailConfigError(
+            f"{TOKEN_ENV} has no scopes recorded; cannot confirm it is "
+            "read-only. Re-run authorize_gmail.py."
+        )
+    disallowed = granted - set(SCOPES)
+    if disallowed:
+        raise GmailConfigError(
+            "Refusing to authenticate: token carries scopes beyond read-only "
+            f"({sorted(disallowed)}). Phase 1 is read-only Gmail only — "
+            "re-mint the token with authorize_gmail.py."
+        )
 
 
 def _load_credentials() -> Credentials:
     """Build read-only Gmail credentials from ``GMAIL_TOKEN_JSON``.
 
     Raises ``GmailConfigError`` with actionable guidance if the env var is
-    unset/invalid, if the token lacks a refresh token, or if it was minted
-    with any scope beyond ``gmail.readonly``.
+    unset/invalid, if the token lacks a refresh token, or if its recorded
+    scopes exceed ``gmail.readonly``.
     """
     raw = os.environ.get(TOKEN_ENV)
     if not raw:
@@ -62,6 +90,9 @@ def _load_credentials() -> Credentials:
             "authorized-user JSON emitted by authorize_gmail.py."
         ) from exc
 
+    # Enforce the trust boundary before doing anything else with the token.
+    _assert_readonly_scopes(info)
+
     try:
         creds = Credentials.from_authorized_user_info(info, list(SCOPES))
     except ValueError as exc:
@@ -69,24 +100,6 @@ def _load_credentials() -> Credentials:
             f"{TOKEN_ENV} is missing required fields ({exc}). Re-run "
             "authorize_gmail.py to regenerate it."
         ) from exc
-
-    # Trust-boundary guard: refuse anything broader than read-only, even if
-    # the token happens to carry extra scopes.
-    granted = set(creds.scopes or [])
-    if not granted:
-        # from_authorized_user_info fills scopes from SCOPES when the token
-        # JSON omits them; an empty set means neither source had any.
-        raise GmailConfigError(
-            f"{TOKEN_ENV} has no scopes recorded; cannot confirm it is "
-            "read-only. Re-run authorize_gmail.py."
-        )
-    disallowed = granted - set(SCOPES)
-    if disallowed:
-        raise GmailConfigError(
-            "Refusing to authenticate: token carries scopes beyond "
-            f"read-only ({sorted(disallowed)}). Phase 1 is read-only Gmail "
-            "only — re-mint the token with authorize_gmail.py."
-        )
 
     if not creds.valid:
         if creds.expired and creds.refresh_token:
@@ -99,11 +112,16 @@ def _load_credentials() -> Credentials:
     return creds
 
 
-def _build_service() -> Any:
-    creds = _load_credentials()
-    # cache_discovery=False avoids the noisy file-cache warning and keeps the
-    # container filesystem untouched.
-    return build("gmail", "v1", credentials=creds, cache_discovery=False)
+def _get_service() -> Any:
+    """Return a cached Gmail API service, building it on first use."""
+    global _service
+    if _service is None:
+        # cache_discovery=False avoids the noisy file-cache warning and keeps
+        # the container filesystem untouched.
+        _service = build(
+            "gmail", "v1", credentials=_load_credentials(), cache_discovery=False
+        )
+    return _service
 
 
 def _header(headers: list[dict[str, str]], name: str) -> str:
@@ -113,6 +131,53 @@ def _header(headers: list[dict[str, str]], name: str) -> str:
         if h.get("name", "").lower() == target:
             return h.get("value", "")
     return ""
+
+
+def _summarise(msg: dict[str, Any]) -> dict[str, str]:
+    headers = msg.get("payload", {}).get("headers", [])
+    return {
+        "id": msg.get("id", ""),
+        "thread_id": msg.get("threadId", ""),
+        "from": _header(headers, "From"),
+        "subject": _header(headers, "Subject"),
+        "date": _header(headers, "Date"),
+        "snippet": msg.get("snippet", ""),
+    }
+
+
+def _fetch_summaries(
+    service: Any, refs: list[dict[str, str]]
+) -> list[dict[str, str]]:
+    """Fetch metadata for each message ref in a single batch request.
+
+    One batched HTTP call instead of one-per-message (avoids N+1 round-trips
+    and the associated latency / rate-limit pressure). Results are reassembled
+    in the original listing order.
+    """
+    by_id: dict[str, dict[str, Any]] = {}
+
+    def _collect(request_id: str, response: Any, exception: Any) -> None:
+        # Skip any individual message that failed; the rest still return.
+        if exception is None and response is not None:
+            by_id[request_id] = response
+
+    batch = service.new_batch_http_request(callback=_collect)
+    for ref in refs:
+        mid = ref["id"]
+        batch.add(
+            service.users()
+            .messages()
+            .get(
+                userId="me",
+                id=mid,
+                format="metadata",
+                metadataHeaders=["From", "Subject", "Date"],
+            ),
+            request_id=mid,
+        )
+    batch.execute()
+
+    return [_summarise(by_id[ref["id"]]) for ref in refs if ref["id"] in by_id]
 
 
 def search_messages(
@@ -139,36 +204,14 @@ def search_messages(
         max_results = _DEFAULT_MAX_RESULTS
     max_results = max(1, min(max_results, _MAX_RESULTS_CAP))
 
-    service = _build_service()
+    service = _get_service()
     listing = (
         service.users()
         .messages()
         .list(userId="me", q=query, maxResults=max_results)
         .execute()
     )
-
-    summaries: list[dict[str, str]] = []
-    for ref in listing.get("messages", []):
-        msg = (
-            service.users()
-            .messages()
-            .get(
-                userId="me",
-                id=ref["id"],
-                format="metadata",
-                metadataHeaders=["From", "Subject", "Date"],
-            )
-            .execute()
-        )
-        headers = msg.get("payload", {}).get("headers", [])
-        summaries.append(
-            {
-                "id": msg.get("id", ""),
-                "thread_id": msg.get("threadId", ""),
-                "from": _header(headers, "From"),
-                "subject": _header(headers, "Subject"),
-                "date": _header(headers, "Date"),
-                "snippet": msg.get("snippet", ""),
-            }
-        )
-    return summaries
+    refs = listing.get("messages", [])
+    if not refs:
+        return []
+    return _fetch_summaries(service, refs)

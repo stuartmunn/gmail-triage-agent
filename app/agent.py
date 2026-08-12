@@ -20,6 +20,7 @@ are out of scope for this story.
 import asyncio
 import json
 import os
+import sys
 from typing import Any
 
 from claude_agent_sdk import (
@@ -56,8 +57,18 @@ async def gmail_search(args: dict[str, Any]) -> dict[str, Any]:
         }
     except Exception as exc:  # noqa: BLE001 — tool boundary: any Gmail/network
         # failure must become a clean error result, never crash the agent run.
+        # Log the detail to stderr (operator's container logs) but return only
+        # the exception type to the agent, so a Gmail API error body can never
+        # surface token-adjacent data into the model-visible tool result.
+        print(f"gmail_search error: {type(exc).__name__}: {exc}", file=sys.stderr)
         return {
-            "content": [{"type": "text", "text": f"gmail_search failed: {exc}"}],
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"gmail_search failed ({type(exc).__name__}); "
+                    "see container logs for detail.",
+                }
+            ],
             "is_error": True,
         }
 
