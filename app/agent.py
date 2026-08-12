@@ -111,14 +111,14 @@ async def telegram_notify(args: dict[str, Any]) -> dict[str, Any]:
             "is_error": True,
         }
     except Exception as exc:  # noqa: BLE001 — tool boundary: never crash the run
-        print(f"telegram_notify error: {type(exc).__name__}: {exc}", file=sys.stderr)
+        # Log only the exception *type*, never its message: the bot token is
+        # carried in the request URL, and an unexpected library/OS error could
+        # embed that URL in its message string. (The common HTTP/URL failures
+        # are already sanitised into TelegramSendError above.)
+        print(f"telegram_notify error: {type(exc).__name__}", file=sys.stderr)
         return {
             "content": [
-                {
-                    "type": "text",
-                    "text": f"telegram_notify failed ({type(exc).__name__}); "
-                    "see container logs for detail.",
-                }
+                {"type": "text", "text": f"telegram_notify failed ({type(exc).__name__})."}
             ],
             "is_error": True,
         }

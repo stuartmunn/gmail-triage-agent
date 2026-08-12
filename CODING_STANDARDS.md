@@ -30,6 +30,10 @@ repo (layout, tooling, phase boundaries). Beyond that:
   such as `<YOUR_API_KEY>` or `os.environ["TELEGRAM_BOT_TOKEN"]`.
 - `credentials.json`, `token.json`, and `.env*` are gitignored — keep it
   that way; don't add exceptions.
+- Don't echo raw exception text at catch-all boundaries when a secret could
+  be embedded in it (e.g. a token in a request URL). Log the exception
+  *type* only, and sanitise known error paths into curated messages. See
+  `telegram_client._describe_http_error` and the `telegram_notify` handler.
 
 ## Python conventions
 
