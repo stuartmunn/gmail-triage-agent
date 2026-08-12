@@ -70,6 +70,43 @@ The SDK drives the agent by spawning the
 local run also needs Node.js 18+ and the CLI on your `PATH`
 (`npm install -g @anthropic-ai/claude-code`). The Docker image bundles both.
 
+## Gmail credentials (read-only)
+
+The agent reads Gmail through the Gmail API with the **`gmail.readonly`**
+scope only — no send, modify, delete, or label access (Phase 1 trust
+boundary). Credentials are supplied at runtime via the `GMAIL_TOKEN_JSON`
+env var and are never committed.
+
+One-time setup (needs a browser, done on your machine):
+
+1. In the [Google Cloud console](https://console.cloud.google.com/), create
+   a project and **enable the Gmail API**.
+2. Configure the OAuth consent screen (**External** is fine for a personal
+   account; add your Gmail address as a **test user**).
+3. Create an **OAuth client ID** of type **Desktop app** and download its
+   JSON — save it as `credentials.json` (gitignored; never commit it).
+4. Mint a read-only token:
+   ```bash
+   cd app
+   pip install -e ".[dev]"          # if not already installed
+   python authorize_gmail.py path/to/credentials.json
+   ```
+   A browser opens for consent (you'll see it request **read-only** access).
+   The script prints the authorised-user JSON to stdout.
+5. Put that JSON into `GMAIL_TOKEN_JSON` — e.g. in a gitignored `.env` at the
+   repo root (one line):
+   ```
+   GMAIL_TOKEN_JSON={"token": "...", "refresh_token": "...", ...}
+   ```
+   `docker compose` passes it through to the container automatically.
+
+**Refresh / regenerate:** the token includes a long-lived `refresh_token`,
+so the agent renews access automatically — no periodic action needed. If the
+token is revoked (e.g. via your Google Account's *Third-party access*), or you
+need to change scope, just re-run `authorize_gmail.py` and replace
+`GMAIL_TOKEN_JSON`. The agent refuses to start if the token carries any scope
+beyond `gmail.readonly`.
+
 ## Development
 
 Lint before pushing:

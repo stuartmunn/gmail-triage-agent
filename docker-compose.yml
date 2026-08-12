@@ -22,6 +22,7 @@ services:
       # Bare names pass the value through from the host/.env if set, without
       # hardcoding anything into this file.
       - ANTHROPIC_API_KEY
+      - GMAIL_TOKEN_JSON
       - TELEGRAM_BOT_TOKEN
       - TELEGRAM_CHAT_ID
       # Where the agent reads/writes live data inside the container; matches

@@ -67,6 +67,18 @@ repo (layout, tooling, phase boundaries). Beyond that:
 - Don't build tools or scopes ahead of the current phase — check
   `CLAUDE.md` → Phases before adding a new capability.
 
+## Auth / OAuth scopes
+
+- Enforce the trust boundary at the point of use, and verify scope from the
+  **token's own record**, not from a re-supplied allow-list. With
+  `google.oauth2.credentials.Credentials.from_authorized_user_info(info,
+  scopes)`, `creds.scopes` reflects the `scopes` argument you passed in — not
+  what the token was actually granted. Check `info["scopes"]` (the granted
+  scopes) instead; comparing `creds.scopes` to your allow-list is a tautology
+  that always passes. See `gmail_client._assert_readonly_scopes`.
+- Request the **narrowest** scope the phase allows (Phase 1 Gmail =
+  `gmail.readonly` only) and keep the scope constant in one place.
+
 ## Docker / build hygiene
 
 - **Never pipe a remote script straight into a shell** in a build
