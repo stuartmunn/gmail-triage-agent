@@ -34,12 +34,20 @@ repo (layout, tooling, phase boundaries). Beyond that:
 ## Python conventions
 
 - **Python 3.12+**, matching `pyproject.toml`'s `requires-python`.
-- Source lives under `src/gmail_triage_agent/`; tests under `tests/`
-  (see `pyproject.toml`'s `[tool.setuptools.packages.find]`).
+- All application code lives under `app/` (the Docker build context): the
+  entry point is `app/agent.py`, the package is `app/gmail_triage_agent/`,
+  tests are `app/tests/`, and `app/pyproject.toml` is the single source of
+  truth for dependencies (see its `[tool.setuptools.packages.find]`).
+  Repo-root files (`CLAUDE.md`, `CODING_STANDARDS.md`, `README.md`,
+  `docker-compose.yml`) stay **outside** `app/` — dev/meta only, never
+  copied into the image.
+- Live, host-editable data (e.g. `known-senders.md`, logs) lives under
+  `data/` at repo root, bind-mounted into the container — never baked into
+  the image.
 - Lint/format with **ruff** (already a dev dependency) — run it before
   pushing:
   ```bash
-  ruff check .
+  ruff check app/
   ```
 - Test with **pytest** (already a dev dependency). No suite exists yet
   (see `CLAUDE.md` → Testing) — add tests as functionality lands.

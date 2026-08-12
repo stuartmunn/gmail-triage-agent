@@ -1,0 +1,36 @@
+# Scoped to the app/ build context. Keeps dev-time and generated files, and
+# anything secret, out of the image.
+
+# Secrets — never into the image (passed at runtime instead)
+.env
+.env.*
+*.env
+credentials.json
+token.json
+
+# Python caches / build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtualenvs
+.venv/
+venv/
+
+# Dev-time only — not needed at runtime
+tests/
+
+# VCS / editor / OS (mostly outside app/ already, listed for safety)
+.git/
+.gitignore
+.vscode/
+.idea/
+.DS_Store
