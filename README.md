@@ -39,16 +39,12 @@ repo root, outside `app/`, so they never end up in the image.
 ## Running
 
 Credentials are always supplied at runtime (env vars), never committed or
-baked into the image. Phase 1 needs `ANTHROPIC_API_KEY`; later stories add
-the Gmail and Telegram secrets (`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`).
+baked into the image. Put them all in a gitignored `.env` at the repo root —
+see **Configuration** below.
 
 ### With Docker (recommended)
 
 ```bash
-# Optional: put secrets in a gitignored .env at the repo root
-#   ANTHROPIC_API_KEY=...
-# (or export them in your shell — docker-compose passes them through)
-
 docker compose up --build
 ```
 
@@ -70,6 +66,47 @@ The SDK drives the agent by spawning the
 local run also needs Node.js 18+ and the CLI on your `PATH`
 (`npm install -g @anthropic-ai/claude-code`). The Docker image bundles both.
 
+## Configuration
+
+All secrets live in a single gitignored `.env` at the **repo root** (next to
+`docker-compose.yml`); `docker compose` passes them through to the container.
+Nothing is committed or baked into the image.
+
+```
+ANTHROPIC_API_KEY=<your-key>
+GMAIL_TOKEN_JSON=<one-line JSON — see "Gmail credentials" below>
+TELEGRAM_BOT_TOKEN=<from BotFather — see "Telegram notifications" below>
+TELEGRAM_CHAT_ID=<your chat id>
+```
+
+- `GMAIL_TOKEN_JSON` must be the token JSON on a **single line, unquoted**:
+  `docker compose` keeps the value verbatim, so surrounding quotes would be
+  taken literally.
+- How to obtain each value is in the two sections below. Then launch with
+  `docker compose up --build` (see **Running**).
+
+### Python environment (venv)
+
+The one-time helper scripts (`authorize_gmail.py`, the local test
+one-liners) run **outside** Docker, so they need the dependencies in a
+virtualenv:
+
+```bash
+cd app
+python3 -m venv .venv
+```
+
+Activation differs by shell:
+
+- **bash/zsh (Linux/macOS):** `source .venv/bin/activate` then `pip install -e .`
+- **Windows PowerShell:** `.\.venv\Scripts\Activate.ps1` then `pip install -e .`
+  — or skip activation and call the venv Python directly:
+  `.\.venv\Scripts\python.exe -m pip install -e .`
+
+On Debian/Ubuntu you may first need `sudo apt install python3.12-venv` (the
+system Python is PEP-668 "externally managed" — install into the venv, never
+with `--break-system-packages`).
+
 ## Gmail credentials (read-only)
 
 The agent reads Gmail through the Gmail API with the **`gmail.readonly`**
@@ -83,22 +120,35 @@ One-time setup (needs a browser, done on your machine):
    a project and **enable the Gmail API**.
 2. Configure the OAuth consent screen (**External** is fine for a personal
    account; add your Gmail address as a **test user**).
-3. Create an **OAuth client ID** of type **Desktop app** and download its
-   JSON — save it as `credentials.json` (gitignored; never commit it).
-4. Mint a read-only token:
+3. Create an **OAuth client ID** of type **Desktop app** (required — a
+   *Web application* client rejects the loopback redirect with
+   `redirect_uri_mismatch`) and download its JSON. A Desktop client's JSON
+   starts with `{"installed": …}`; a Web one starts with `{"web": …}`. Keep
+   it gitignored; never commit it.
+4. Mint a read-only token using the venv from **Configuration → Python
+   environment**:
    ```bash
-   cd app
-   pip install -e ".[dev]"          # if not already installed
+   # from app/, inside the activated venv (Windows: use .\.venv\Scripts\python.exe)
    python authorize_gmail.py path/to/credentials.json
    ```
    A browser opens for consent (you'll see it request **read-only** access).
-   The script prints the authorised-user JSON to stdout.
+   The script prints the authorised-user JSON as its **last line** (stdout);
+   the guidance above it goes to stderr.
 5. Put that JSON into `GMAIL_TOKEN_JSON` — e.g. in a gitignored `.env` at the
    repo root (one line):
    ```
    GMAIL_TOKEN_JSON={"token": "...", "refresh_token": "...", ...}
    ```
    `docker compose` passes it through to the container automatically.
+
+> **Headless / remote servers:** `authorize_gmail.py` needs a browser for the
+> consent screen, which a headless box (e.g. a home server) doesn't have. Run
+> the mint step on any machine **with a browser** (e.g. your laptop), then
+> copy just the printed `GMAIL_TOKEN_JSON` into the server's `.env`. The token
+> is portable, and `credentials.json` never needs to reach the server.
+
+> **Troubleshooting `redirect_uri_mismatch`:** the OAuth client is a *Web
+> application* type — recreate it as **Desktop app** (step 3).
 
 **Refresh / regenerate:** the token includes a long-lived `refresh_token`,
 so the agent renews access automatically — no periodic action needed. If the
@@ -131,7 +181,8 @@ One-time setup:
    `docker compose` passes them through automatically. Neither is ever
    committed.
 
-To verify quickly from a local checkout:
+To verify quickly from a local checkout (inside the venv from
+**Configuration → Python environment**, with the two Telegram vars set):
 
 ```bash
 cd app
