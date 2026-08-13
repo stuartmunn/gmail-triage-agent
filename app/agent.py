@@ -1,41 +1,28 @@
-"""Bare-bones agent skeleton for the Gmail Triage Agent (GTA-4).
+"""Entry point for the Gmail Triage Agent (Phase 1).
 
-Phase 1 skeleton only — see CLAUDE.md for scope and trust boundaries.
+Phase 1 scope and trust boundaries — see CLAUDE.md. This run is a synchronous
+pipeline, not an agentic tool loop:
 
-Registers exactly two tools and nothing else:
+1. Decide the window of mail to triage (incremental since last success, or a
+   manual ``GTA_SEARCH_QUERY`` override for testing) — see ``runstate``.
+2. Fetch that window read-only from Gmail (``gmail.readonly`` scope only; see
+   ``gmail_client``). No write access of any kind.
+3. Triage each message: Haiku classifies every email with a confidence, and
+   uncertain ones escalate to Sonnet (see ``model_router`` — GTA-11). The
+   models get **no tools** — they return a decision, they cannot act.
+4. Notify via Telegram (send-only, to the single fixed ``TELEGRAM_CHAT_ID``;
+   see ``telegram_client``) once per actionable message, and stay completely
+   silent when nothing needs attention.
 
-- ``gmail_search`` (read) — real, read-only Gmail search via the Gmail API
-  (``gmail.readonly`` scope only; see ``gmail_client``). No write access of
-  any kind.
-- ``telegram_notify`` (send) — real, send-only Telegram notification to a
-  single fixed chat ID read from ``TELEGRAM_CHAT_ID`` (see
-  ``telegram_client``). Never reads messages, and the chat ID can't be set
-  by the model.
-
-``allowed_tools`` is restricted to just these two — no built-in Claude Code
-tools (bash, file read/write, web search, etc.) and no other MCP tools are
-registered or permitted. Each run loads the gmail-triage skill and the
-host-editable known-senders list (see ``triage``) and triages a window of
-recent mail: it notifies via ``telegram_notify`` for each actionable
-message, and stays completely silent when nothing needs attention.
+The trust boundary is unchanged from earlier phases: read-only Gmail in, a
+Telegram message to one fixed chat out, nothing else touched.
 """
 
-import asyncio
-import json
 import logging
 import os
 import sys
-from typing import Any
 
-from claude_agent_sdk import (
-    ClaudeAgentOptions,
-    ResultMessage,
-    create_sdk_mcp_server,
-    query,
-    tool,
-)
-
-from gmail_triage_agent import runstate, triage
+from gmail_triage_agent import model_router, runstate, triage
 from gmail_triage_agent.gmail_client import (
     GmailConfigError,
     ensure_credentials,
@@ -47,93 +34,7 @@ from gmail_triage_agent.telegram_client import (
     send_message,
 )
 
-MCP_SERVER_NAME = "gmail_triage"
 log = logging.getLogger("gmail_triage")
-
-
-@tool(
-    "gmail_search",
-    "Search Gmail (read-only) using Gmail search syntax "
-    "(e.g. 'newer_than:1d -category:promotions'). Returns message summaries: "
-    "id, thread_id, from, subject, date, snippet.",
-    {"query": str},
-)
-async def gmail_search(args: dict[str, Any]) -> dict[str, Any]:
-    """Real, read-only Gmail search. Runs the blocking Gmail API call in a
-    worker thread so the event loop is not stalled. Credential and API errors
-    are returned as an error result rather than raised, so the agent gets a
-    clean tool response it can reason about."""
-    query_text = args.get("query", "")
-    try:
-        results = await asyncio.to_thread(search_messages, query_text)
-    except GmailConfigError as exc:
-        return {
-            "content": [{"type": "text", "text": f"gmail_search unavailable: {exc}"}],
-            "is_error": True,
-        }
-    except Exception as exc:  # noqa: BLE001 — tool boundary: any Gmail/network
-        # failure must become a clean error result, never crash the agent run.
-        # Log the detail to stderr (operator's container logs) but return only
-        # the exception type to the agent, so a Gmail API error body can never
-        # surface token-adjacent data into the model-visible tool result.
-        print(f"gmail_search error: {type(exc).__name__}: {exc}", file=sys.stderr)
-        return {
-            "content": [
-                {
-                    "type": "text",
-                    "text": f"gmail_search failed ({type(exc).__name__}); "
-                    "see container logs for detail.",
-                }
-            ],
-            "is_error": True,
-        }
-
-    if not results:
-        return {
-            "content": [
-                {"type": "text", "text": f"No messages matched query {query_text!r}."}
-            ]
-        }
-    return {
-        "content": [
-            {"type": "text", "text": json.dumps(results, ensure_ascii=False, indent=2)}
-        ]
-    }
-
-
-@tool(
-    "telegram_notify",
-    "Send a notification message to the operator's fixed Telegram chat. "
-    "Use only when a triaged message genuinely needs attention.",
-    {"message": str},
-)
-async def telegram_notify(args: dict[str, Any]) -> dict[str, Any]:
-    """Real, send-only Telegram notification. The destination chat ID is read
-    from ``TELEGRAM_CHAT_ID`` inside ``send_message`` — it is never taken from
-    ``args`` — so the model cannot redirect the notification. The blocking
-    HTTP call runs in a worker thread; failures return a clean tool error
-    (never leaking the bot token) rather than crashing the run."""
-    message = args.get("message", "")
-    try:
-        await asyncio.to_thread(send_message, message)
-    except (TelegramConfigError, TelegramSendError) as exc:
-        return {
-            "content": [{"type": "text", "text": f"telegram_notify failed: {exc}"}],
-            "is_error": True,
-        }
-    except Exception as exc:  # noqa: BLE001 — tool boundary: never crash the run
-        # Log only the exception *type*, never its message: the bot token is
-        # carried in the request URL, and an unexpected library/OS error could
-        # embed that URL in its message string. (The common HTTP/URL failures
-        # are already sanitised into TelegramSendError above.)
-        print(f"telegram_notify error: {type(exc).__name__}", file=sys.stderr)
-        return {
-            "content": [
-                {"type": "text", "text": f"telegram_notify failed ({type(exc).__name__})."}
-            ],
-            "is_error": True,
-        }
-    return {"content": [{"type": "text", "text": "Notification sent."}]}
 
 
 def _configure_logging() -> None:
@@ -151,42 +52,17 @@ def _configure_logging() -> None:
     )
 
 
-async def _run_triage(query_text: str, options: ClaudeAgentOptions) -> bool:
-    """Run one triage pass. Returns True only if the run reached a non-error
-    final result — the signal used to decide whether to advance run-state."""
-    saw_result = False
-    result_ok = False
-    try:
-        async for message in query(
-            prompt=triage.build_task_prompt(query_text), options=options
-        ):
-            log.info("%s", message)
-            if isinstance(message, ResultMessage):
-                saw_result = True
-                result_ok = not getattr(message, "is_error", False)
-    except Exception:  # any run failure must not advance the run-state marker
-        log.exception("Triage run raised")
-        return False
-    return saw_result and result_ok
+def _format_notification(verdict: model_router.MessageVerdict) -> str:
+    """A concise Telegram summary: who it's from, the subject, and why."""
+    return f"{verdict.sender}\n{verdict.subject}\n{verdict.reason}"
 
 
-async def main() -> int:
+def main() -> int:
     """One triage run. Returns a process exit code: 0 on success, 1 on
     failure. On a successful *scheduled* run, advances the last-success marker
     so the next run only sees newer mail; a failed run leaves it untouched so
     the same window is retried."""
     _configure_logging()
-
-    gmail_triage_server = create_sdk_mcp_server(
-        name=MCP_SERVER_NAME,
-        version="0.1.0",
-        tools=[gmail_search, telegram_notify],
-    )
-
-    two_tools = [
-        f"mcp__{MCP_SERVER_NAME}__gmail_search",
-        f"mcp__{MCP_SERVER_NAME}__telegram_notify",
-    ]
 
     # Decide the window for this run. A manual GTA_SEARCH_QUERY override (used
     # for testing) is honoured but never touches the scheduled run-state.
@@ -208,46 +84,108 @@ async def main() -> int:
     # *before* it can look like a successful (empty) triage and wrongly advance
     # the marker.
     try:
-        await asyncio.to_thread(ensure_credentials)
+        ensure_credentials()
     except GmailConfigError as exc:
         log.error("Gmail credential pre-flight failed; aborting run: %s", exc)
         return 1
 
-    # Triage rules (ship with the app) + known-senders (host-editable data),
-    # loaded fresh each run. Injected into the system prompt rather than via
-    # the SDK `skills` option, which would add a `Skill` tool and setting-source
-    # discovery and breach the exactly-two-tools boundary.
-    skill = triage.load_skill()
-    known_senders = triage.load_known_senders()
-
-    options = ClaudeAgentOptions(
-        mcp_servers={MCP_SERVER_NAME: gmail_triage_server},
-        # `tools=[]` disables every built-in Claude Code tool (Bash, Read,
-        # Write, Task, ...) — without this, `tools` defaults to the full
-        # built-in preset regardless of `allowed_tools`, which only governs
-        # whether a tool is auto-approved, not whether it's registered at
-        # all. `strict_mcp_config` stops any other MCP server config (user
-        # settings, project .mcp.json, plugins) from sneaking in more tools.
-        tools=[],
-        strict_mcp_config=True,
-        allowed_tools=two_tools,
-        # No interactive terminal is attached to this script, so anything
-        # not in `allowed_tools` must be denied outright rather than prompt.
-        permission_mode="dontAsk",
-        system_prompt=triage.build_system_prompt(skill, known_senders),
-    )
-
-    if not await _run_triage(query_text, options):
-        log.error("Triage run did not complete cleanly; run-state not advanced.")
+    try:
+        messages = search_messages(query_text)
+    except GmailConfigError as exc:
+        log.error("Gmail search failed; aborting run: %s", exc)
+        return 1
+    except Exception:  # noqa: BLE001 — any Gmail/network failure fails the run
+        # Full detail to the operator's logs (never model- or user-visible);
+        # the run fails so the run-state marker is not advanced.
+        log.exception("Gmail search raised; run-state not advanced.")
         return 1
 
+    log.info("Fetched %d message(s) for the window.", len(messages))
+
+    if not messages:
+        return _finish(manual_query, run_start, note="no messages")
+
+    # Triage rules (ship with the app) + known-senders (host-editable data),
+    # loaded fresh each run.
+    try:
+        skill = triage.load_skill()
+    except triage.TriageConfigError as exc:
+        log.error("Could not load the triage skill; aborting run: %s", exc)
+        return 1
+    known_senders = triage.load_known_senders()
+
+    threshold = model_router.read_threshold()
+    log.info(
+        "Triaging with confidence threshold %.2f (Haiku first, Sonnet on "
+        "uncertainty).",
+        threshold,
+    )
+
+    try:
+        verdicts = model_router.triage_messages(
+            messages, skill, known_senders, threshold=threshold
+        )
+    except model_router.ModelRouterError as exc:
+        log.error("Triage aborted (model routing): %s; run-state not advanced.", exc)
+        return 1
+    except Exception:  # noqa: BLE001 — any classifier failure fails the run
+        log.exception("Triage raised; run-state not advanced.")
+        return 1
+
+    actionable = [v for v in verdicts if v.decision == "notify"]
+    log.info(
+        "Triage complete: %d/%d actionable, %d escalated to Sonnet.",
+        len(actionable),
+        len(verdicts),
+        sum(1 for v in verdicts if v.escalated),
+    )
+
+    # Telegram sends aren't transactional: a failure partway advances nothing,
+    # so the whole window is retried and the already-sent ones re-notify. Log
+    # how many went out before a failure so a partial send is visible.
+    sent = 0
+    try:
+        for verdict in actionable:
+            send_message(_format_notification(verdict))
+            sent += 1
+            log.info(
+                "Notified: from=%r subject=%r (%s)",
+                verdict.sender,
+                verdict.subject,
+                verdict.model,
+            )
+    except (TelegramConfigError, TelegramSendError) as exc:
+        log.error(
+            "Telegram notification failed after %d/%d sent: %s; "
+            "run-state not advanced.",
+            sent,
+            len(actionable),
+            exc,
+        )
+        return 1
+    except Exception:  # noqa: BLE001 — never crash; fail the run instead
+        log.exception(
+            "Telegram notification raised after %d/%d sent; run-state not advanced.",
+            sent,
+            len(actionable),
+        )
+        return 1
+
+    return _finish(manual_query, run_start)
+
+
+def _finish(manual_query: str, run_start: int, note: str = "") -> int:
+    """Advance the run-state marker on a successful scheduled run (only)."""
+    suffix = f" ({note})" if note else ""
     if manual_query:
-        log.info("Manual run complete; run-state left unchanged.")
+        log.info("Manual run complete%s; run-state left unchanged.", suffix)
     else:
         runstate.write_last_success(run_start)
-        log.info("Triage run OK; advanced last_success to %s.", run_start)
+        log.info(
+            "Triage run OK%s; advanced last_success to %s.", suffix, run_start
+        )
     return 0
 
 
 if __name__ == "__main__":
-    raise SystemExit(asyncio.run(main()))
+    raise SystemExit(main())

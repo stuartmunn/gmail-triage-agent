@@ -27,13 +27,16 @@ Read-only Gmail monitoring, triage against a skill, Telegram notification.
 
 - Gmail access is **read-only** (search/read messages and threads only —
   no label, archive, send, draft, or delete).
-- Triage logic runs as a Claude skill; output is a notification, not an
+- Triage logic runs against a Claude skill; output is a notification, not an
   inbox mutation.
 - Notification is **Telegram-only** — no email replies, no auto-labeling,
   no other side effects.
-- Tools available to the agent in this phase: `gmail_search` (read) and
-  `telegram_notify` (send, to a single fixed chat ID from env). Nothing
-  else is registered in `allowed_tools`.
+- The triage models get **no tools**: each email is classified via the
+  Anthropic Messages API (structured decision + confidence; Haiku first,
+  Sonnet on uncertainty), and the model cannot act. Gmail is read via the
+  read-only Gmail client and Telegram is sent via the send-only client (fixed
+  chat ID from env) — both from the pipeline in `agent.py`, never the model.
+  No other capability is wired in.
 
 ### Phase 2 — not yet scoped
 
@@ -62,7 +65,7 @@ imply adjacent tools (e.g. `gmail_search` grants read, never write).
 ## Tech Stack
 
 - **Language**: Python 3.12
-- **Agent runtime**: [Claude Agent SDK](https://docs.claude.com/en/api/agent-sdk/overview) (`query()`)
+- **Model access**: [Claude API](https://docs.claude.com/en/api/overview) — the Anthropic Messages API (`anthropic` SDK), structured outputs, Haiku→Sonnet routing (no tools registered on the models)
 - **Email**: Gmail API (read-only scope in Phase 1)
 - **Notifications**: Telegram Bot API
 

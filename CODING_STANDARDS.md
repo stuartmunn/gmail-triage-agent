@@ -83,6 +83,19 @@ repo (layout, tooling, phase boundaries). Beyond that:
   `triage.load_skill` / `TriageConfigError`. (Optional data may degrade
   gracefully instead — e.g. `load_known_senders` returns `None`.)
 
+## Claude API (Messages)
+
+- Request structured output via
+  `output_config={"format": {"type": "json_schema", "schema": ...}}` — the
+  current Messages-API parameter (`output_format` is deprecated). Don't assume
+  every installed `anthropic` version accepts it: also spell out the exact JSON
+  shape in the prompt and parse defensively (tolerate a stray code fence), so an
+  older SDK degrades to prompt-instructed JSON instead of failing every call.
+  See `model_router.classify`.
+- Triage models are given **no tools** (Phase 1) — classification returns a
+  decision, it never acts. Keep Gmail read and Telegram send in the pipeline
+  (`agent.py`), never reachable by the model.
+
 ## Auth / OAuth scopes
 
 - Enforce the trust boundary at the point of use, and verify scope from the

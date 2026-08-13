@@ -25,6 +25,9 @@ services:
       - GMAIL_TOKEN_JSON
       - TELEGRAM_BOT_TOKEN
       - TELEGRAM_CHAT_ID
+      # Optional: confidence below which a Haiku decision is re-run through
+      # Sonnet (GTA-11). Read at runtime, so it can be tuned without a rebuild.
+      - GTA_CONFIDENCE_THRESHOLD
       # Where the agent reads/writes live data inside the container; matches
       # the bind mount below.
       - GTA_DATA_DIR=/app/data

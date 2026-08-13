@@ -9,7 +9,7 @@ description: >-
 
 # Gmail triage rules
 
-You are triaging a batch of recent email. For **each** message, decide:
+You are triaging recent email. For **each** message, decide:
 does this genuinely need Stuart's attention now, or not? Reason about it in
 plain language using the guidance below — do not pattern-match on keywords
 alone. When you're unsure, lean towards **not** notifying: a missed
@@ -72,10 +72,10 @@ deadline.
 
 ## Output
 
-- For **each** actionable message, send exactly one Telegram notification via
-  `telegram_notify`, with a concise summary: who it's from, the subject, and
-  one line on why it matters (including any deadline). One message per
-  actionable item — do not batch them into a digest.
-- If **nothing** in the batch is actionable, send **no** notification at all.
-  No "all clear", no summary, no digest — complete silence. Just report "No
-  action needed." as your final reply.
+- For an actionable message, the decision is **notify**, with a concise reason:
+  who it's from, the subject, and one line on why it matters (including any
+  deadline). The system sends exactly one Telegram notification per actionable
+  message based on your decision — you do not send it yourself, and actionable
+  messages are never batched into a digest.
+- For a message that is **not** actionable, the decision is **silent**. No "all
+  clear", no summary, no digest — silence is the correct output.
