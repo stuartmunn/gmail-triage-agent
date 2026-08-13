@@ -112,6 +112,17 @@ def _load_credentials() -> Credentials:
     return creds
 
 
+def ensure_credentials() -> None:
+    """Validate Gmail credentials up front (load + refresh if needed).
+
+    Used as a pre-flight so a scheduled run with broken/expired/over-scoped
+    credentials fails *before* it can be mistaken for a successful (empty)
+    triage — which would wrongly advance the last-run marker. Raises
+    ``GmailConfigError`` on any credential problem.
+    """
+    _load_credentials()
+
+
 def _get_service() -> Any:
     """Return a cached Gmail API service, building it on first use."""
     global _service
