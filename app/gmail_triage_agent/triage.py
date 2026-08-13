@@ -23,9 +23,6 @@ KNOWN_SENDERS_FILENAME = "known-senders.md"
 # Default window of mail to triage in one run. GTA-10 will replace this with an
 # incremental "since last successful run" window; until then a bounded recent
 # window keeps each run cheap and predictable. Overridable via env.
-DEFAULT_SEARCH_QUERY = "in:inbox newer_than:1d"
-
-
 class TriageConfigError(RuntimeError):
     """Raised when required triage content (the skill) cannot be loaded."""
 
@@ -65,13 +62,6 @@ def load_known_senders() -> str | None:
         return (data_dir() / KNOWN_SENDERS_FILENAME).read_text(encoding="utf-8")
     except FileNotFoundError:
         return None
-
-
-def search_query() -> str:
-    """The Gmail query for this run (env override, else the default window)."""
-    return os.environ.get("GTA_SEARCH_QUERY", DEFAULT_SEARCH_QUERY).strip() or (
-        DEFAULT_SEARCH_QUERY
-    )
 
 
 def build_system_prompt(skill: str, known_senders: str | None) -> str:

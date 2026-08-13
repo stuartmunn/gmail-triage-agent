@@ -69,13 +69,3 @@ def test_build_task_prompt_has_query_and_silence_rule():
     assert "in:inbox newer_than:2d" in prompt
     assert "No action needed." in prompt
     assert "telegram_notify" in prompt
-
-
-def test_search_query_env_override(monkeypatch):
-    monkeypatch.setenv("GTA_SEARCH_QUERY", "is:unread newer_than:3d")
-    assert triage.search_query() == "is:unread newer_than:3d"
-
-
-def test_search_query_default(monkeypatch):
-    monkeypatch.delenv("GTA_SEARCH_QUERY", raising=False)
-    assert triage.search_query() == triage.DEFAULT_SEARCH_QUERY

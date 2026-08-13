@@ -190,10 +190,10 @@ async def main() -> int:
 
     # Decide the window for this run. A manual GTA_SEARCH_QUERY override (used
     # for testing) is honoured but never touches the scheduled run-state.
-    manual_query = os.environ.get("GTA_SEARCH_QUERY")
+    manual_query = os.environ.get("GTA_SEARCH_QUERY", "").strip()
     run_start = runstate.now_epoch()
     if manual_query:
-        query_text = triage.search_query()
+        query_text = manual_query
         log.info("Manual run (GTA_SEARCH_QUERY set); run-state will not advance.")
     else:
         last_success = runstate.read_last_success()

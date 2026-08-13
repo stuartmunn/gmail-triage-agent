@@ -58,6 +58,9 @@ repo (layout, tooling, phase boundaries). Beyond that:
 - Use type hints on function signatures for new code; prefer standard
   library `dataclasses`/`typing` over ad-hoc dicts for structured data.
 - Prefer explicit imports (`from x import y`) over wildcard imports.
+- Persist state files atomically: write to a **unique** temp file in the same
+  directory (e.g. `tempfile.mkstemp`), then `os.replace` onto the target —
+  never a shared `.tmp` path. See `runstate.write_last_success`.
 
 ## Agent SDK conventions
 

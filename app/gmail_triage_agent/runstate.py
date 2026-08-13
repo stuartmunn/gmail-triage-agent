@@ -12,6 +12,8 @@ it survives container restarts and rebuilds.
 
 from __future__ import annotations
 
+import os
+import tempfile
 import time
 from pathlib import Path
 
@@ -46,12 +48,28 @@ def read_last_success() -> int | None:
 
 
 def write_last_success(epoch: int) -> None:
-    """Persist ``epoch`` as the last successful run time, atomically."""
+    """Persist ``epoch`` as the last successful run time, atomically.
+
+    Writes to a unique temp file in the same directory, then ``os.replace`` —
+    atomic on POSIX and safe even if two writers ever raced (each gets its own
+    temp, so neither can corrupt the other's partial write).
+    """
     path = state_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(".tmp")
-    tmp.write_text(str(int(epoch)), encoding="utf-8")
-    tmp.replace(path)  # atomic on POSIX — never leaves a half-written marker
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(path.parent), prefix=f"{path.name}.", suffix=".tmp"
+    )
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write(str(int(epoch)))
+        os.replace(tmp_name, path)  # never leaves a half-written marker
+    except BaseException:
+        # Don't leave an orphan temp behind on any failure.
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 def incremental_query(last_success: int | None) -> str:
