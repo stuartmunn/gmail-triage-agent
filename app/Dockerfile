@@ -38,9 +38,12 @@ RUN npm install -g @anthropic-ai/claude-code \
 RUN useradd --create-home --uid 1000 appuser
 
 # Non-root user can't write bytecode caches into the root-owned /app, and we
-# want unbuffered stdout so container logs stream in real time.
+# want unbuffered stdout so container logs stream in real time. GTA_DATA_DIR
+# points at the bind-mounted data dir (known-senders, logs) so it resolves
+# correctly even when run without compose.
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    GTA_DATA_DIR=/app/data
 
 WORKDIR /app
 

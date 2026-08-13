@@ -20,6 +20,10 @@ htmlcov/
 credentials.json
 token.json
 
+# Personal triage data — the live known-senders list holds real contacts;
+# only the .example template is tracked.
+data/known-senders.md
+
 # Editors / OS
 .vscode/
 .idea/

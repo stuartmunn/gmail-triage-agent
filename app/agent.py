@@ -14,8 +14,10 @@ Registers exactly two tools and nothing else:
 
 ``allowed_tools`` is restricted to just these two — no built-in Claude Code
 tools (bash, file read/write, web search, etc.) and no other MCP tools are
-registered or permitted. The triage logic (the gmail-triage skill) is a
-later story.
+registered or permitted. Each run loads the gmail-triage skill and the
+host-editable known-senders list (see ``triage``) and triages a window of
+recent mail: it notifies via ``telegram_notify`` for each actionable
+message, and stays completely silent when nothing needs attention.
 """
 
 import asyncio
@@ -30,6 +32,7 @@ from claude_agent_sdk import (
     tool,
 )
 
+from gmail_triage_agent import triage
 from gmail_triage_agent.gmail_client import GmailConfigError, search_messages
 from gmail_triage_agent.telegram_client import (
     TelegramConfigError,
@@ -137,6 +140,15 @@ async def main() -> None:
         f"mcp__{MCP_SERVER_NAME}__telegram_notify",
     ]
 
+    # Load the triage rules (ships with the app) and the known-senders list
+    # (host-editable data) fresh on every run — see `triage`. We inject them
+    # into the system prompt rather than using the SDK `skills` option, which
+    # would add a `Skill` tool and require setting-source discovery, breaching
+    # the exactly-two-tools boundary.
+    skill = triage.load_skill()
+    known_senders = triage.load_known_senders()
+    query_text = triage.search_query()
+
     options = ClaudeAgentOptions(
         mcp_servers={MCP_SERVER_NAME: gmail_triage_server},
         # `tools=[]` disables every built-in Claude Code tool (Bash, Read,
@@ -151,21 +163,12 @@ async def main() -> None:
         # No interactive terminal is attached to this script, so anything
         # not in `allowed_tools` must be denied outright rather than prompt.
         permission_mode="dontAsk",
-        system_prompt=(
-            "You are the Gmail Triage Agent (Phase 1 skeleton). You have "
-            "exactly two tools: gmail_search (read-only) and telegram_notify "
-            "(sends to one fixed chat). You have no other tools and no "
-            "write access to Gmail."
-        ),
+        system_prompt=triage.build_system_prompt(skill, known_senders),
     )
 
-    placeholder_prompt = (
-        "This is a placeholder run of the Phase 1 skeleton. Briefly confirm "
-        "which tools you have available and that you will not use any "
-        "others."
-    )
-
-    async for message in query(prompt=placeholder_prompt, options=options):
+    async for message in query(
+        prompt=triage.build_task_prompt(query_text), options=options
+    ):
         print(message)
 
 
