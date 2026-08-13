@@ -4,8 +4,11 @@ An agent that watches a Gmail inbox and triages incoming mail — classifying
 and prioritizing messages, and notifying via Telegram when something needs
 attention — so the inbox stays manageable without manual sorting.
 
-Built on the [Claude Agent SDK](https://docs.claude.com/en/api/agent-sdk/overview).
-The build is scoped in phases with explicit trust boundaries; see
+Built on the [Claude API](https://docs.claude.com/en/api/overview) (the
+Anthropic Messages API): each email is classified by Claude with structured
+output — Haiku first, escalating to Sonnet when Haiku is unsure (see
+**Triage rules** below). The build is scoped in phases with explicit trust
+boundaries; see
 [`CLAUDE.md`](./CLAUDE.md). **Phase 1 (current) is read-only:** Gmail read
 access only, notification via Telegram, no inbox mutations of any kind.
 
@@ -29,7 +32,7 @@ Early scaffold. Development is tracked in Jira project
 ├── data/                 # Live, host-editable data, bind-mounted at runtime
 │   ├── known-senders.md  #   (gitignored; copy from known-senders.example.md)
 │   ├── state/            #   last-success marker for incremental runs
-│   └── logs/             #   triage.log + cron.log (retrievable run logs)
+│   └── logs/             #   triage.log, cron.log, escalations.jsonl
 ├── scripts/              # Ops tooling (triage-cron.sh) — not in the image
 ├── docker-compose.yml    # Repo root; builds ./app, mounts ./data
 ├── CLAUDE.md             # Project guidance   ── repo-root/dev files,
@@ -65,10 +68,8 @@ pip install -e ".[dev]"
 python agent.py
 ```
 
-The SDK drives the agent by spawning the
-[Claude Code CLI](https://docs.claude.com/en/api/agent-sdk/overview), so a
-local run also needs Node.js 18+ and the CLI on your `PATH`
-(`npm install -g @anthropic-ai/claude-code`). The Docker image bundles both.
+The agent calls the Anthropic API directly over HTTPS (no Node.js or CLI
+needed) — a Python environment and an `ANTHROPIC_API_KEY` are enough.
 
 ## Configuration
 
@@ -81,6 +82,8 @@ ANTHROPIC_API_KEY=<your-key>
 GMAIL_TOKEN_JSON=<one-line JSON — see "Gmail credentials" below>
 TELEGRAM_BOT_TOKEN=<from BotFather — see "Telegram notifications" below>
 TELEGRAM_CHAT_ID=<your chat id>
+# Optional: confidence below which Haiku escalates to Sonnet (default 0.7)
+GTA_CONFIDENCE_THRESHOLD=0.7
 ```
 
 - `GMAIL_TOKEN_JSON` must be the token JSON on a **single line, unquoted**:
@@ -217,9 +220,18 @@ If it's absent, the agent still runs and treats every sender as unknown.
 **Silence when nothing's actionable:** a run that finds nothing worth your
 attention sends **no** Telegram message at all — no all-clear, no digest.
 
+**Model selection (cheap first, escalate on uncertainty):** every email is
+classified first by **Haiku** (`claude-haiku-4-5`), which returns a decision
+*and* a confidence. When that confidence is below a threshold, the email is
+re-run through **Sonnet** (`claude-sonnet-5`) and Sonnet's verdict is taken as
+final — so the pricier model is spent only where Haiku was unsure. The
+threshold defaults to `0.7`; override it with the `GTA_CONFIDENCE_THRESHOLD`
+env var (`0.0`–`1.0`). It's read at runtime, so you can tune it without a
+rebuild. Each escalation is recorded in `data/logs/escalations.jsonl`
+(sender, subject, confidences, and which model ruled — never the email body).
+
 Each run triages a recent window of mail (default `in:inbox newer_than:1d`);
-override with the `GTA_SEARCH_QUERY` env var. (Incremental "since last run"
-windows come in GTA-10.)
+override with the `GTA_SEARCH_QUERY` env var.
 
 ## Scheduling (every 3 hours)
 
@@ -258,8 +270,10 @@ A manual `GTA_SEARCH_QUERY` run (see **Triage rules**) is for testing and
 
 **Logs** (retrievable under `data/logs/`, on the host):
 
-- `triage.log` — the agent's detailed per-run log (window, tool calls,
+- `triage.log` — the agent's detailed per-run log (window, model passes,
   result, whether the marker advanced).
+- `escalations.jsonl` — one record per Haiku→Sonnet escalation (sender,
+  subject, confidences, final model). No email body is ever logged.
 - `cron.log` — one line per scheduled fire, with the exit status.
 
 After changing code or `SKILL.md`, rebuild so scheduled runs pick it up
