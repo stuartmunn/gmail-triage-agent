@@ -21,12 +21,13 @@ Early scaffold. Development is tracked in Jira project
 ├── app/                  # All application code — the Docker build context
 │   ├── agent.py          # Entry point
 │   ├── gmail_triage_agent/   # Package
+│   ├── gmail-triage/     # Triage skill (SKILL.md) — ships with the app
 │   ├── tests/            # Tests (dev-time; excluded from the image)
 │   ├── pyproject.toml    # Dependencies — single source of truth
 │   ├── Dockerfile        # Build context is app/, not the repo root
 │   └── .dockerignore
-├── data/                 # Live, host-editable data (senders list, logs),
-│                         #   bind-mounted into the container at runtime
+├── data/                 # Live, host-editable data, bind-mounted at runtime
+│   └── known-senders.md  #   (gitignored; copy from known-senders.example.md)
 ├── docker-compose.yml    # Repo root; builds ./app, mounts ./data
 ├── CLAUDE.md             # Project guidance   ── repo-root/dev files,
 ├── CODING_STANDARDS.md   # Conventions        ── never copied into the image
@@ -188,6 +189,34 @@ To verify quickly from a local checkout (inside the venv from
 cd app
 python -c "from gmail_triage_agent.telegram_client import send_message; send_message('Gmail Triage Agent test ✅')"
 ```
+
+## Triage rules
+
+What counts as "needs attention" is defined in
+[`app/gmail-triage/SKILL.md`](app/gmail-triage/SKILL.md) — plain-language
+guidance the agent reasons over (named people and direct asks outrank
+newsletters; deadlines and bills are flagged; FYI threads and marketing are
+not). It ships with the app. It's a **living document**: when the agent
+misjudges a message, tune the rules there rather than working around them.
+
+Your personal contacts live in `data/known-senders.md`, separate from the
+rules so you can edit it without touching code or rebuilding. It's
+**gitignored** (keeps real contacts off GitHub) and **read fresh every run**,
+so host edits take effect on the next run. Create it from the template:
+
+```bash
+cp data/known-senders.example.md data/known-senders.md
+# then edit data/known-senders.md with your real people/domains
+```
+
+If it's absent, the agent still runs and treats every sender as unknown.
+
+**Silence when nothing's actionable:** a run that finds nothing worth your
+attention sends **no** Telegram message at all — no all-clear, no digest.
+
+Each run triages a recent window of mail (default `in:inbox newer_than:1d`);
+override with the `GTA_SEARCH_QUERY` env var. (Incremental "since last run"
+windows come in GTA-10.)
 
 ## Development
 
