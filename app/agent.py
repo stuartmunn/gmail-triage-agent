@@ -140,9 +140,14 @@ def main() -> int:
         sum(1 for v in verdicts if v.escalated),
     )
 
+    # Telegram sends aren't transactional: a failure partway advances nothing,
+    # so the whole window is retried and the already-sent ones re-notify. Log
+    # how many went out before a failure so a partial send is visible.
+    sent = 0
     try:
         for verdict in actionable:
             send_message(_format_notification(verdict))
+            sent += 1
             log.info(
                 "Notified: from=%r subject=%r (%s)",
                 verdict.sender,
@@ -150,10 +155,20 @@ def main() -> int:
                 verdict.model,
             )
     except (TelegramConfigError, TelegramSendError) as exc:
-        log.error("Telegram notification failed: %s; run-state not advanced.", exc)
+        log.error(
+            "Telegram notification failed after %d/%d sent: %s; "
+            "run-state not advanced.",
+            sent,
+            len(actionable),
+            exc,
+        )
         return 1
     except Exception:  # noqa: BLE001 — never crash; fail the run instead
-        log.exception("Telegram notification raised; run-state not advanced.")
+        log.exception(
+            "Telegram notification raised after %d/%d sent; run-state not advanced.",
+            sent,
+            len(actionable),
+        )
         return 1
 
     return _finish(manual_query, run_start)

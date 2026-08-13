@@ -146,6 +146,20 @@ def _clamp01(value: float) -> float:
     return max(0.0, min(1.0, value))
 
 
+def _strip_json_fence(text: str) -> str:
+    """Drop a leading ```json / ``` fence and trailing ```, if the model added one.
+
+    ``output_config.format`` yields bare JSON, but the prompt-only fallback path
+    (older SDKs) can occasionally wrap it in a code fence — tolerate that.
+    """
+    stripped = text.strip()
+    if stripped.startswith("```"):
+        stripped = stripped[stripped.find("\n") + 1:] if "\n" in stripped else ""
+        if stripped.rstrip().endswith("```"):
+            stripped = stripped.rstrip()[:-3]
+    return stripped.strip()
+
+
 def classify(
     client: Any, model: str, system_prompt: str, user_prompt: str
 ) -> TriageResult:
@@ -154,13 +168,25 @@ def classify(
     Returns a structured ``{decision, confidence, reason}`` (no tools). Raises
     ``ModelRouterError`` if the response can't be parsed into a valid verdict.
     """
-    response = client.messages.create(
+    create_kwargs: dict[str, Any] = dict(
         model=model,
         max_tokens=_MAX_TOKENS.get(model, _DEFAULT_MAX_TOKENS),
         system=system_prompt,
         messages=[{"role": "user", "content": user_prompt}],
-        output_config={"format": {"type": "json_schema", "schema": _DECISION_SCHEMA}},
     )
+    # Prefer the Messages-API structured-output guarantee (output_config.format).
+    # If the installed SDK is older and rejects the kwarg, fall back to plain
+    # generation — the system prompt already demands a bare JSON object, so the
+    # parse below still works; the request just isn't schema-constrained.
+    try:
+        response = client.messages.create(
+            **create_kwargs,
+            output_config={
+                "format": {"type": "json_schema", "schema": _DECISION_SCHEMA}
+            },
+        )
+    except TypeError:
+        response = client.messages.create(**create_kwargs)
 
     text = next(
         (
@@ -174,7 +200,7 @@ def classify(
         raise ModelRouterError(f"{model} returned no text block to parse.")
 
     try:
-        data = json.loads(text)
+        data = json.loads(_strip_json_fence(text))
     except (json.JSONDecodeError, TypeError) as exc:
         raise ModelRouterError(f"{model} returned unparsable JSON: {exc}") from exc
 
@@ -328,5 +354,6 @@ def _append_escalation_record(record: dict[str, Any]) -> None:
         log_dir.mkdir(parents=True, exist_ok=True)
         with (log_dir / "escalations.jsonl").open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(record, ensure_ascii=False) + "\n")
-    except OSError as exc:
+    except (OSError, ValueError, TypeError) as exc:
+        # Never let a logging failure (I/O *or* serialization) fail a triage run.
         log.warning("Could not write escalation record: %s", exc)

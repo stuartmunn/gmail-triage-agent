@@ -15,7 +15,9 @@ from gmail_triage_agent.model_router import (
     HAIKU_MODEL,
     SONNET_MODEL,
     THRESHOLD_ENV,
+    ModelRouterError,
     TriageResult,
+    classify,
     read_threshold,
     triage_messages,
 )
@@ -159,3 +161,98 @@ def test_no_escalation_writes_no_record(tmp_path, monkeypatch):
 def test_read_threshold_is_module_level_helper():
     # Guard against accidental rename — agent.py calls this name.
     assert callable(model_router.read_threshold)
+
+
+# --- classify() against a stub Anthropic client (no network) -----------------
+
+
+class _StubBlock:
+    def __init__(self, text):
+        self.type = "text"
+        self.text = text
+
+
+class _StubUsage:
+    input_tokens = 11
+    output_tokens = 7
+
+
+class _StubResponse:
+    def __init__(self, text):
+        self.content = [_StubBlock(text)]
+        self.usage = _StubUsage()
+
+
+class _StubMessages:
+    def __init__(self, outer):
+        self._outer = outer
+
+    def create(self, **kwargs):
+        self._outer.calls.append(kwargs)
+        if "output_config" in kwargs and self._outer.reject_output_config:
+            raise TypeError("unexpected keyword argument 'output_config'")
+        return _StubResponse(self._outer.text)
+
+
+class _StubClient:
+    def __init__(self, text, reject_output_config=False):
+        self.text = text
+        self.reject_output_config = reject_output_config
+        self.calls = []
+        self.messages = _StubMessages(self)
+
+
+def test_classify_parses_json_and_captures_usage():
+    client = _StubClient('{"decision": "notify", "confidence": 0.83, "reason": "bill due"}')
+    result = classify(client, HAIKU_MODEL, "sys", "user")
+    assert result.decision == "notify"
+    assert result.confidence == 0.83
+    assert result.reason == "bill due"
+    assert result.model == HAIKU_MODEL
+    assert result.usage == {"input_tokens": 11, "output_tokens": 7}
+    assert "output_config" in client.calls[0]  # schema-constrained by default
+
+
+def test_classify_strips_code_fence():
+    fenced = '```json\n{"decision": "silent", "confidence": 0.9, "reason": "newsletter"}\n```'
+    result = classify(_StubClient(fenced), HAIKU_MODEL, "sys", "user")
+    assert result.decision == "silent"
+    assert result.confidence == 0.9
+
+
+def test_classify_clamps_out_of_range_confidence():
+    result = classify(
+        _StubClient('{"decision": "notify", "confidence": 1.7, "reason": "x"}'),
+        HAIKU_MODEL,
+        "sys",
+        "user",
+    )
+    assert result.confidence == 1.0
+
+
+def test_classify_falls_back_when_output_config_rejected():
+    # An older SDK that rejects output_config still works via the prompt.
+    client = _StubClient(
+        '{"decision": "notify", "confidence": 0.5, "reason": "ask"}',
+        reject_output_config=True,
+    )
+    result = classify(client, SONNET_MODEL, "sys", "user")
+    assert result.decision == "notify"
+    assert len(client.calls) == 2  # rejected attempt, then plain retry
+    assert "output_config" in client.calls[0]
+    assert "output_config" not in client.calls[1]
+
+
+def test_classify_rejects_invalid_decision():
+    with pytest.raises(ModelRouterError):
+        classify(
+            _StubClient('{"decision": "maybe", "confidence": 0.5, "reason": "x"}'),
+            HAIKU_MODEL,
+            "sys",
+            "user",
+        )
+
+
+def test_classify_rejects_unparsable_output():
+    with pytest.raises(ModelRouterError):
+        classify(_StubClient("not json at all"), HAIKU_MODEL, "sys", "user")
