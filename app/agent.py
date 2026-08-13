@@ -22,18 +22,25 @@ message, and stays completely silent when nothing needs attention.
 
 import asyncio
 import json
+import logging
+import os
 import sys
 from typing import Any
 
 from claude_agent_sdk import (
     ClaudeAgentOptions,
+    ResultMessage,
     create_sdk_mcp_server,
     query,
     tool,
 )
 
-from gmail_triage_agent import triage
-from gmail_triage_agent.gmail_client import GmailConfigError, search_messages
+from gmail_triage_agent import runstate, triage
+from gmail_triage_agent.gmail_client import (
+    GmailConfigError,
+    ensure_credentials,
+    search_messages,
+)
 from gmail_triage_agent.telegram_client import (
     TelegramConfigError,
     TelegramSendError,
@@ -41,6 +48,7 @@ from gmail_triage_agent.telegram_client import (
 )
 
 MCP_SERVER_NAME = "gmail_triage"
+log = logging.getLogger("gmail_triage")
 
 
 @tool(
@@ -128,7 +136,47 @@ async def telegram_notify(args: dict[str, Any]) -> dict[str, Any]:
     return {"content": [{"type": "text", "text": "Notification sent."}]}
 
 
-async def main() -> None:
+def _configure_logging() -> None:
+    """Log to the bind-mounted data dir (retrievable for debugging missed or
+    failed runs) and to stdout (so an interactive/cron run shows progress)."""
+    log_dir = triage.data_dir() / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        handlers=[
+            logging.FileHandler(log_dir / "triage.log", encoding="utf-8"),
+            logging.StreamHandler(sys.stdout),
+        ],
+    )
+
+
+async def _run_triage(query_text: str, options: ClaudeAgentOptions) -> bool:
+    """Run one triage pass. Returns True only if the run reached a non-error
+    final result — the signal used to decide whether to advance run-state."""
+    saw_result = False
+    result_ok = False
+    try:
+        async for message in query(
+            prompt=triage.build_task_prompt(query_text), options=options
+        ):
+            log.info("%s", message)
+            if isinstance(message, ResultMessage):
+                saw_result = True
+                result_ok = not getattr(message, "is_error", False)
+    except Exception:  # any run failure must not advance the run-state marker
+        log.exception("Triage run raised")
+        return False
+    return saw_result and result_ok
+
+
+async def main() -> int:
+    """One triage run. Returns a process exit code: 0 on success, 1 on
+    failure. On a successful *scheduled* run, advances the last-success marker
+    so the next run only sees newer mail; a failed run leaves it untouched so
+    the same window is retried."""
+    _configure_logging()
+
     gmail_triage_server = create_sdk_mcp_server(
         name=MCP_SERVER_NAME,
         version="0.1.0",
@@ -140,14 +188,37 @@ async def main() -> None:
         f"mcp__{MCP_SERVER_NAME}__telegram_notify",
     ]
 
-    # Load the triage rules (ships with the app) and the known-senders list
-    # (host-editable data) fresh on every run — see `triage`. We inject them
-    # into the system prompt rather than using the SDK `skills` option, which
-    # would add a `Skill` tool and require setting-source discovery, breaching
-    # the exactly-two-tools boundary.
+    # Decide the window for this run. A manual GTA_SEARCH_QUERY override (used
+    # for testing) is honoured but never touches the scheduled run-state.
+    manual_query = os.environ.get("GTA_SEARCH_QUERY", "").strip()
+    run_start = runstate.now_epoch()
+    if manual_query:
+        query_text = manual_query
+        log.info("Manual run (GTA_SEARCH_QUERY set); run-state will not advance.")
+    else:
+        last_success = runstate.read_last_success()
+        query_text = runstate.incremental_query(last_success)
+        log.info(
+            "Scheduled run: last_success=%s, window query=%r",
+            last_success,
+            query_text,
+        )
+
+    # Pre-flight the Gmail credentials so a broken/expired token fails the run
+    # *before* it can look like a successful (empty) triage and wrongly advance
+    # the marker.
+    try:
+        await asyncio.to_thread(ensure_credentials)
+    except GmailConfigError as exc:
+        log.error("Gmail credential pre-flight failed; aborting run: %s", exc)
+        return 1
+
+    # Triage rules (ship with the app) + known-senders (host-editable data),
+    # loaded fresh each run. Injected into the system prompt rather than via
+    # the SDK `skills` option, which would add a `Skill` tool and setting-source
+    # discovery and breach the exactly-two-tools boundary.
     skill = triage.load_skill()
     known_senders = triage.load_known_senders()
-    query_text = triage.search_query()
 
     options = ClaudeAgentOptions(
         mcp_servers={MCP_SERVER_NAME: gmail_triage_server},
@@ -166,11 +237,17 @@ async def main() -> None:
         system_prompt=triage.build_system_prompt(skill, known_senders),
     )
 
-    async for message in query(
-        prompt=triage.build_task_prompt(query_text), options=options
-    ):
-        print(message)
+    if not await _run_triage(query_text, options):
+        log.error("Triage run did not complete cleanly; run-state not advanced.")
+        return 1
+
+    if manual_query:
+        log.info("Manual run complete; run-state left unchanged.")
+    else:
+        runstate.write_last_success(run_start)
+        log.info("Triage run OK; advanced last_success to %s.", run_start)
+    return 0
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    raise SystemExit(asyncio.run(main()))

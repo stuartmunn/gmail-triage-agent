@@ -27,7 +27,10 @@ Early scaffold. Development is tracked in Jira project
 │   ├── Dockerfile        # Build context is app/, not the repo root
 │   └── .dockerignore
 ├── data/                 # Live, host-editable data, bind-mounted at runtime
-│   └── known-senders.md  #   (gitignored; copy from known-senders.example.md)
+│   ├── known-senders.md  #   (gitignored; copy from known-senders.example.md)
+│   ├── state/            #   last-success marker for incremental runs
+│   └── logs/             #   triage.log + cron.log (retrievable run logs)
+├── scripts/              # Ops tooling (triage-cron.sh) — not in the image
 ├── docker-compose.yml    # Repo root; builds ./app, mounts ./data
 ├── CLAUDE.md             # Project guidance   ── repo-root/dev files,
 ├── CODING_STANDARDS.md   # Conventions        ── never copied into the image
@@ -217,6 +220,50 @@ attention sends **no** Telegram message at all — no all-clear, no digest.
 Each run triages a recent window of mail (default `in:inbox newer_than:1d`);
 override with the `GTA_SEARCH_QUERY` env var. (Incremental "since last run"
 windows come in GTA-10.)
+
+## Scheduling (every 3 hours)
+
+Triage runs unattended on a schedule via **host cron** on the server (one
+mechanism, not both — there's no in-container scheduler). Each run is a
+one-off `docker compose run`; the agent owns the incremental window.
+
+Install the cron entry (`crontab -e`) to run every 3 hours:
+
+```
+0 */3 * * * /home/stuart/apps/gmail-triage-agent/scripts/triage-cron.sh
+```
+
+[`scripts/triage-cron.sh`](scripts/triage-cron.sh) sets a sane `PATH`, `cd`s
+into the repo, takes a lock (so runs can't overlap), launches one triage
+pass, and records that it fired.
+
+**Incremental window & the last-success marker.** Each run triages only mail
+that arrived since the last *successful* run:
+
+- The marker is `data/state/last_success` (epoch seconds), under the
+  bind-mounted `data/` dir, so it **survives restarts and rebuilds**.
+- A run records its start time and, **only if it succeeds**, writes that as
+  the new marker — so the next run searches `in:inbox after:<marker>`.
+- A **failed** run (bad credentials, an error result, a crash) leaves the
+  marker untouched, so the same window is retried next time — nothing is
+  silently skipped.
+- The **first** run (no marker yet) triages a bootstrap window
+  (`in:inbox newer_than:1d`). To re-bootstrap later, delete the marker:
+  ```bash
+  rm data/state/last_success
+  ```
+
+A manual `GTA_SEARCH_QUERY` run (see **Triage rules**) is for testing and
+**does not** move the marker.
+
+**Logs** (retrievable under `data/logs/`, on the host):
+
+- `triage.log` — the agent's detailed per-run log (window, tool calls,
+  result, whether the marker advanced).
+- `cron.log` — one line per scheduled fire, with the exit status.
+
+After changing code or `SKILL.md`, rebuild so scheduled runs pick it up
+(`docker compose build`); `known-senders.md` needs no rebuild.
 
 ## Development
 

@@ -23,18 +23,16 @@ KNOWN_SENDERS_FILENAME = "known-senders.md"
 # Default window of mail to triage in one run. GTA-10 will replace this with an
 # incremental "since last successful run" window; until then a bounded recent
 # window keeps each run cheap and predictable. Overridable via env.
-DEFAULT_SEARCH_QUERY = "in:inbox newer_than:1d"
-
-
 class TriageConfigError(RuntimeError):
     """Raised when required triage content (the skill) cannot be loaded."""
 
 
-def _data_dir() -> Path:
-    """Resolve the live data directory.
+def data_dir() -> Path:
+    """Resolve the live data directory (bind-mounted at runtime).
 
     ``GTA_DATA_DIR`` is the authority (set in the image / compose to
-    ``/app/data``). Falls back to ``<repo-root>/data`` for local runs.
+    ``/app/data``). Falls back to ``<repo-root>/data`` for local runs. Shared
+    by known-senders, run-state, and logging so they all agree on the path.
     """
     env = os.environ.get("GTA_DATA_DIR")
     if env:
@@ -61,16 +59,9 @@ def load_known_senders() -> str | None:
     """Read ``data/known-senders.md`` fresh — no caching — so host edits take
     effect on the next run. Returns ``None`` if the file is absent."""
     try:
-        return (_data_dir() / KNOWN_SENDERS_FILENAME).read_text(encoding="utf-8")
+        return (data_dir() / KNOWN_SENDERS_FILENAME).read_text(encoding="utf-8")
     except FileNotFoundError:
         return None
-
-
-def search_query() -> str:
-    """The Gmail query for this run (env override, else the default window)."""
-    return os.environ.get("GTA_SEARCH_QUERY", DEFAULT_SEARCH_QUERY).strip() or (
-        DEFAULT_SEARCH_QUERY
-    )
 
 
 def build_system_prompt(skill: str, known_senders: str | None) -> str:

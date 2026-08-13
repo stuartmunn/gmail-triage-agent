@@ -24,6 +24,10 @@ token.json
 # only the .example template is tracked.
 data/known-senders.md
 
+# Runtime data written by the agent — logs and the last-success marker.
+data/logs/
+data/state/
+
 # Editors / OS
 .vscode/
 .idea/
