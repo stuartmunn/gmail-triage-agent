@@ -31,8 +31,9 @@ Early scaffold. Development is tracked in Jira project
 │   └── .dockerignore
 ├── data/                 # Live, host-editable data, bind-mounted at runtime
 │   ├── known-senders.md  #   (gitignored; copy from known-senders.example.md)
+│   ├── pricing.json      #   (optional, gitignored; copy from pricing.example.json)
 │   ├── state/            #   last-success marker for incremental runs
-│   └── logs/             #   triage.log, cron.log, escalations.jsonl
+│   └── logs/             #   triage.log, cron.log, escalations.jsonl, costs.jsonl
 ├── scripts/              # Ops tooling (triage-cron.sh) — not in the image
 ├── docker-compose.yml    # Repo root; builds ./app, mounts ./data
 ├── CLAUDE.md             # Project guidance   ── repo-root/dev files,
@@ -230,6 +231,18 @@ env var (`0.0`–`1.0`). It's read at runtime, so you can tune it without a
 rebuild. Each escalation is recorded in `data/logs/escalations.jsonl`
 (sender, subject, confidences, and which model ruled — never the email body).
 
+**Cost tracking:** every run is priced from the token counts the API returns.
+Each email gets a line in `data/logs/costs.jsonl` — sender, subject, total
+cost, and a per-model token/cost breakdown (so an escalation shows the Haiku
+*and* Sonnet cost, not just a combined figure); the email body is never
+logged. A per-run rollup lands in `data/logs/cost-summary.jsonl`, and the run
+total is echoed to `triage.log` (`Run cost: $… across N email(s)`), so
+GTA-11's escalation threshold can be tuned against what runs actually cost.
+Model pricing is a config value, not hardcoded: copy `data/pricing.example.json`
+to `data/pricing.json` and edit it when a model is repriced — it's read fresh
+each run, no rebuild (e.g. Sonnet 5's introductory rate reverts on 2026-08-31).
+Without the file, dated in-code defaults are used.
+
 Each run triages a recent window of mail (default `in:inbox newer_than:1d`);
 override with the `GTA_SEARCH_QUERY` env var.
 
@@ -274,6 +287,11 @@ A manual `GTA_SEARCH_QUERY` run (see **Triage rules**) is for testing and
   result, whether the marker advanced).
 - `escalations.jsonl` — one record per Haiku→Sonnet escalation (sender,
   subject, confidences, final model). No email body is ever logged.
+- `costs.jsonl` — one record per email triaged (sender, subject, total cost,
+  per-model token/cost breakdown). No email body is ever logged.
+- `cost-summary.jsonl` — one record per run (email count, escalations, total
+  cost, per-model totals); group by `ts` for daily figures. A per-run `run_id`
+  on both files joins each email line to its run summary.
 - `cron.log` — one line per scheduled fire, with the exit status.
 
 After changing code or `SKILL.md`, rebuild so scheduled runs pick it up

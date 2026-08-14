@@ -22,7 +22,7 @@ import logging
 import os
 import sys
 
-from gmail_triage_agent import model_router, runstate, triage
+from gmail_triage_agent import cost, model_router, runstate, triage
 from gmail_triage_agent.gmail_client import (
     GmailConfigError,
     ensure_credentials,
@@ -139,6 +139,10 @@ def main() -> int:
         len(verdicts),
         sum(1 for v in verdicts if v.escalated),
     )
+
+    # Price the run (GTA-12): logs a running total and appends per-email/per-run
+    # cost records. Observability only — never fails the run.
+    cost.record_run(verdicts)
 
     # Telegram sends aren't transactional: a failure partway advances nothing,
     # so the whole window is retried and the already-sent ones re-notify. Log
