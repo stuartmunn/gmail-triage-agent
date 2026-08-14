@@ -63,8 +63,7 @@ def write_last_success(epoch: int) -> None:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(str(int(epoch)))
         os.replace(tmp_name, path)  # never leaves a half-written marker
-    except BaseException:
-        # Don't leave an orphan temp behind on any failure.
+    except BaseException:  # noqa: BLE001 — remove the orphan temp on *any* failure, then re-raise
         try:
             os.unlink(tmp_name)
         except OSError:
