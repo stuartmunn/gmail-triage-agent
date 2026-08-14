@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import logging
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
@@ -199,16 +200,20 @@ def _now_iso() -> str:
 
 
 def _run_totals(costs: list[EmailCost]) -> tuple[float, dict[str, float], int]:
-    """Roll per-email costs up into a run total, per-model totals, escalations."""
-    total = 0.0
+    """Roll per-email costs up into per-model totals, a run total, escalations.
+
+    The run total is summed from the per-model totals (not independently from
+    each email's ``total_usd``) so the summary's total and its by-model
+    breakdown are always derived from the same figures.
+    """
     per_model: dict[str, float] = {}
     escalated = 0
-    for cost in costs:
-        total += cost.total_usd
-        if cost.escalated:
+    for ec in costs:
+        if ec.escalated:
             escalated += 1
-        for m in cost.by_model:
+        for m in ec.by_model:
             per_model[m.model] = per_model.get(m.model, 0.0) + m.usd
+    total = sum(per_model.values())
     return total, per_model, escalated
 
 
@@ -236,18 +241,35 @@ def _append_records(costs: list[EmailCost]) -> None:
     - ``costs.jsonl`` — one line per email (sender, subject, cost, tokens; no
       body).
     - ``cost-summary.jsonl`` — one line per run (total + per-model breakdown).
+
+    Both share a per-run ``run_id`` so an email line can be joined back to its
+    run's summary, and so runs stay distinguishable when several fall in the
+    same day. The two files are written independently: a failure on one never
+    blocks the other (the summary carries the run total, the figure most worth
+    preserving).
     """
     log_dir = triage.data_dir() / "logs"
     ts = _now_iso()
+    run_id = uuid.uuid4().hex[:12]
+
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
-        with (log_dir / "costs.jsonl").open("a", encoding="utf-8") as handle:
-            for cost in costs:
-                handle.write(json.dumps(_email_record(ts, cost), ensure_ascii=False) + "\n")
+    except OSError as exc:
+        log.warning("Could not create cost log dir %s: %s", log_dir, exc)
+        return
 
+    try:
+        with (log_dir / "costs.jsonl").open("a", encoding="utf-8") as handle:
+            for ec in costs:
+                handle.write(json.dumps(_email_record(ts, run_id, ec), ensure_ascii=False) + "\n")
+    except (OSError, ValueError, TypeError) as exc:
+        log.warning("Could not write per-email cost records: %s", exc)
+
+    try:
         total, per_model, escalated = _run_totals(costs)
         summary = {
             "ts": ts,
+            "run_id": run_id,
             "emails": len(costs),
             "escalated": escalated,
             "total_usd": round(total, 6),
@@ -256,18 +278,18 @@ def _append_records(costs: list[EmailCost]) -> None:
         with (log_dir / "cost-summary.jsonl").open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(summary, ensure_ascii=False) + "\n")
     except (OSError, ValueError, TypeError) as exc:
-        # Never let a logging failure (I/O *or* serialization) fail a run.
-        log.warning("Could not write cost records: %s", exc)
+        log.warning("Could not write cost summary record: %s", exc)
 
 
-def _email_record(ts: str, cost: EmailCost) -> dict[str, Any]:
+def _email_record(ts: str, run_id: str, ec: EmailCost) -> dict[str, Any]:
     """One per-email cost record — sender/subject/cost/tokens only, no body."""
     return {
         "ts": ts,
-        "sender": cost.sender,
-        "subject": cost.subject,
-        "escalated": cost.escalated,
-        "total_usd": round(cost.total_usd, 6),
+        "run_id": run_id,
+        "sender": ec.sender,
+        "subject": ec.subject,
+        "escalated": ec.escalated,
+        "total_usd": round(ec.total_usd, 6),
         "by_model": [
             {
                 "model": m.model,
@@ -275,6 +297,6 @@ def _email_record(ts: str, cost: EmailCost) -> dict[str, Any]:
                 "output_tokens": m.output_tokens,
                 "usd": round(m.usd, 6),
             }
-            for m in cost.by_model
+            for m in ec.by_model
         ],
     }

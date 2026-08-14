@@ -179,6 +179,8 @@ def test_record_run_writes_per_email_and_summary(tmp_path, monkeypatch):
     assert summary["escalated"] == 1
     assert summary["total_usd"] == 4.0  # $1 + ($1 + $2)
     assert summary["by_model"] == {HAIKU_MODEL: 2.0, SONNET_MODEL: 2.0}
+    # The run_id ties each email line back to this run's summary line.
+    assert summary["run_id"] == json.loads(per_email[0])["run_id"] == json.loads(per_email[1])["run_id"]
 
 
 def test_record_run_logs_no_email_content(tmp_path, monkeypatch):
@@ -194,7 +196,7 @@ def test_record_run_logs_no_email_content(tmp_path, monkeypatch):
     text = (tmp_path / "logs" / "costs.jsonl").read_text(encoding="utf-8")
     record = json.loads(text.strip())
     # Only sender/subject/cost/token keys — no snippet/body/reason/decision.
-    assert set(record) == {"ts", "sender", "subject", "escalated", "total_usd", "by_model"}
+    assert set(record) == {"ts", "run_id", "sender", "subject", "escalated", "total_usd", "by_model"}
     assert set(record["by_model"][0]) == {"model", "input_tokens", "output_tokens", "usd"}
 
 

@@ -290,7 +290,8 @@ A manual `GTA_SEARCH_QUERY` run (see **Triage rules**) is for testing and
 - `costs.jsonl` — one record per email triaged (sender, subject, total cost,
   per-model token/cost breakdown). No email body is ever logged.
 - `cost-summary.jsonl` — one record per run (email count, escalations, total
-  cost, per-model totals); group by `ts` for daily figures.
+  cost, per-model totals); group by `ts` for daily figures. A per-run `run_id`
+  on both files joins each email line to its run summary.
 - `cron.log` — one line per scheduled fire, with the exit status.
 
 After changing code or `SKILL.md`, rebuild so scheduled runs pick it up
