@@ -48,11 +48,20 @@ repo (layout, tooling, phase boundaries). Beyond that:
 - Live, host-editable data (e.g. `known-senders.md`, logs) lives under
   `data/` at repo root, bind-mounted into the container — never baked into
   the image.
-- Lint/format with **ruff** (already a dev dependency) — run it before
-  pushing:
+- Lint with **ruff** (already a dev dependency) — the canonical command,
+  run before pushing, is:
   ```bash
   ruff check app/
   ```
+  The rule set is pinned in `app/pyproject.toml` (`[tool.ruff]`) so results
+  are identical wherever ruff is invoked from: `target-version = "py312"` and
+  `select = ["E4", "E7", "E9", "F", "I", "BLE"]` (pyflakes + core pycodestyle,
+  import sorting, and blind-except). pyupgrade (`UP`) and comprehension (`C4`)
+  rules are deliberately **not** selected — the codebase uses `Optional[...]`
+  by choice. A genuinely intentional broad `except` (a failure-boundary catch,
+  or a cleanup-then-`raise`) must carry `# noqa: BLE001` with a one-line reason
+  — see `agent.py` and `runstate.write_last_success`. Expanding the rule set
+  or wiring ruff into CI is a separate change, not a drive-by.
 - Test with **pytest** (already a dev dependency). No suite exists yet
   (see `CLAUDE.md` → Testing) — add tests as functionality lands.
 - Use type hints on function signatures for new code; prefer standard
