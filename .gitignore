@@ -24,6 +24,10 @@ token.json
 # only the .example template is tracked.
 data/known-senders.md
 
+# Live model pricing override — only the .example template is tracked; the
+# host copies it to data/pricing.json and edits when models are repriced.
+data/pricing.json
+
 # Runtime data written by the agent — logs and the last-success marker.
 data/logs/
 data/state/
